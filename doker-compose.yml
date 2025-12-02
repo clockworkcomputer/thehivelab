@@ -1,0 +1,222 @@
+###############################################################################
+# Clockwork Computer - LAB SOC
+# Stack: TheHive 5 + Cortex + MISP + Cassandra + Elasticsearch + MinIO
+# Uso: docker compose up -d
+#
+# NOTA PARA ALUMNOS:
+#   Sustituye TODAS las apariciones de YOUR_SERVER_IP por la IP de tu máquina
+#   (por ejemplo 192.168.1.50) antes de arrancar el laboratorio.
+###############################################################################
+
+services:
+  ###########################################################################
+  # THEHIVE 5
+  ###########################################################################
+  thehive:
+    image: strangebee/thehive:5.2
+    container_name: thehive
+    restart: unless-stopped
+    depends_on:
+      - cassandra
+      - elasticsearch
+      - minio
+      - cortex.local
+    mem_limit: 1500m
+    ports:
+      - "0.0.0.0:9000:9000"    # Acceso web: http://YOUR_SERVER_IP:9000
+    environment:
+      - JVM_OPTS=-Xms1024M -Xmx1024M
+    command:
+      - --secret
+      - "clockwork_thehive_lab_secret_change_me"
+      - "--cql-hostnames"
+      - "cassandra"
+      - "--index-backend"
+      - "elasticsearch"
+      - "--es-hostnames"
+      - "elasticsearch"
+      - "--s3-endpoint"
+      - "http://minio:9002"
+      - "--s3-access-key"
+      - "clockworkminio"
+      - "--s3-secret-key"
+      - "ChangeMinioPass!123"
+      - "--s3-use-path-access-style"
+    # Persistimos el application.conf en un volumen nombrado.
+    volumes:
+      - thehivedata:/etc/thehive/application.conf
+    networks:
+      - SOC_NET
+
+  ###########################################################################
+  # CASSANDRA (base de datos de TheHive)
+  ###########################################################################
+  cassandra:
+    image: cassandra:4
+    container_name: cassandra
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:9042:9042"
+    environment:
+      - CASSANDRA_CLUSTER_NAME=TheHive
+    volumes:
+      - cassandradata:/var/lib/cassandra
+    networks:
+      - SOC_NET
+
+  ###########################################################################
+  # ELASTICSEARCH (índices de TheHive)
+  ###########################################################################
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.9
+    container_name: elasticsearch
+    restart: unless-stopped
+    mem_limit: 512m
+    ports:
+      - "0.0.0.0:9200:9200"    # Opcional para pruebas con curl
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - cluster.name=hive
+      - http.host=0.0.0.0
+      - ES_JAVA_OPTS=-Xms256m -Xmx256m
+    volumes:
+      - elasticsearchdata:/usr/share/elasticsearch/data
+    networks:
+      - SOC_NET
+
+  ###########################################################################
+  # MINIO (S3-compatible para ficheros adjuntos de TheHive)
+  ###########################################################################
+  minio:
+    image: quay.io/minio/minio
+    container_name: minio
+    restart: unless-stopped
+    command: ["minio", "server", "/data", "--console-address", ":9002"]
+    environment:
+      - MINIO_ROOT_USER=clockworkminio
+      - MINIO_ROOT_PASSWORD=ChangeMinioPass!123
+    ports:
+      - "0.0.0.0:9002:9002"    # Consola: http://YOUR_SERVER_IP:9002
+    volumes:
+      - miniodata:/data
+    networks:
+      - SOC_NET
+
+  ###########################################################################
+  # CORTEX (motor de análisis)
+  # Se usa como fqdn interno: cortex.local
+  ###########################################################################
+  cortex.local:
+    image: thehiveproject/cortex:latest
+    container_name: cortex
+    restart: unless-stopped
+    environment:
+      - job_directory=/tmp/cortex-jobs
+      - docker_job_directory=/tmp/cortex-jobs
+    volumes:
+      # OJO: esto da acceso al Docker del host (solo para LAB).
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/cortex-jobs:/tmp/cortex-jobs
+      - ./cortex/logs:/var/log/cortex
+      - ./cortex/application.conf:/cortex/application.conf
+    depends_on:
+      - elasticsearch
+    ports:
+      - "0.0.0.0:9001:9001"    # Acceso web: http://YOUR_SERVER_IP:9001
+    networks:
+      - SOC_NET
+
+  ###########################################################################
+  # MISP (Malware Information Sharing Platform)
+  # FQDN interno: misp.local
+  ###########################################################################
+  misp.local:
+    image: coolacid/misp-docker:core-latest
+    container_name: misp
+    restart: unless-stopped
+    depends_on: 
+      - misp_mysql
+      - redis
+    ports:
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
+    volumes:
+      - "./server-configs/:/var/www/MISP/app/Config/"
+      - "./logs/:/var/www/MISP/app/tmp/logs/"
+      - "./files/:/var/www/MISP/app/files"
+      - "./ssl/:/etc/nginx/certs"
+    environment:
+      - MYSQL_HOST=misp_mysql
+      - MYSQL_DATABASE=mispdb
+      - MYSQL_USER=mispuser
+      - MYSQL_PASSWORD=ChangeMispDbPass!123
+      - MISP_ADMIN_EMAIL=admin@clockwork.lab
+      - MISP_ADMIN_PASSPHRASE=ChangeMispAdminPass!123
+      - MISP_BASEURL=http://YOUR_SERVER_IP
+      - TIMEZONE=Europe/Madrid
+      - INIT=true
+      - CRON_USER_ID=1
+      - REDIS_FQDN=redis
+      - HOSTNAME=http://YOUR_SERVER_IP
+    networks:
+      - SOC_NET
+
+  ###########################################################################
+  # MySQL para MISP
+  ###########################################################################
+  misp_mysql:
+    image: mysql/mysql-server:5.7
+    container_name: misp_mysql
+    restart: unless-stopped
+    volumes:
+      - mispsqldata:/var/lib/mysql
+    environment:
+      - MYSQL_DATABASE=mispdb
+      - MYSQL_USER=mispuser
+      - MYSQL_PASSWORD=ChangeMispDbPass!123
+      - MYSQL_ROOT_PASSWORD=ChangeMispRootPass!123
+    networks:
+      - SOC_NET
+
+  ###########################################################################
+  # Redis para MISP
+  ###########################################################################
+  redis:
+    image: redis:latest
+    container_name: redis
+    restart: unless-stopped
+    networks:
+      - SOC_NET
+
+  ###########################################################################
+  # MISP MODULES (enriquecimiento, etc.)
+  ###########################################################################
+  misp-modules:
+    image: coolacid/misp-docker:modules-latest
+    container_name: misp-modules
+    restart: unless-stopped
+    environment:
+      - REDIS_BACKEND=redis
+    depends_on:
+      - redis
+      - misp_mysql
+    networks:
+      - SOC_NET
+
+###############################################################################
+# Volúmenes nombrados (datos persistentes)
+###############################################################################
+volumes:
+  miniodata:
+  cassandradata:
+  elasticsearchdata:
+  thehivedata:
+  mispsqldata:
+
+###############################################################################
+# Red Docker para el SOC
+###############################################################################
+networks:
+  SOC_NET:
+    driver: bridge
