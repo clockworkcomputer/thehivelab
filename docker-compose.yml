@@ -153,12 +153,12 @@ services:
       - MYSQL_PASSWORD=ChangeMispDbPass!123
       - MISP_ADMIN_EMAIL=admin@clockwork.lab
       - MISP_ADMIN_PASSPHRASE=ChangeMispAdminPass!123
-      - MISP_BASEURL=http://YOUR_SERVER_IP
+      - MISP_BASEURL=https://YOUR_SERVER_IP
       - TIMEZONE=Europe/Madrid
       - INIT=true
       - CRON_USER_ID=1
       - REDIS_FQDN=redis
-      - HOSTNAME=http://YOUR_SERVER_IP
+      - HOSTNAME=https://YOUR_SERVER_IP
     networks:
       - SOC_NET
 
